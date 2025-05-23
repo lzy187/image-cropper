@@ -1,9 +1,10 @@
 {
   "name": "image-anchor-cropper",
-  "version": "1.0.0",
-  "description": "A tool for dynamic image cropping with anchor points",
+  "version": "1.1.0",
+  "description": "A comprehensive tool for dynamic image cropping with anchor points, featuring advanced image processing, data augmentation, and dataset export capabilities for machine learning workflows",
   "author": "Your Name",
   "license": "MIT",
+  "keywords": ["image-processing", "cropping", "data-augmentation", "machine-learning", "dataset", "computer-vision"],
   "main": "index.js",
   "scripts": {
     "dev": "next dev",
@@ -14,10 +15,10 @@
     "desktop": "tauri dev",
     "desktop-build": "tauri build"
   },
-  "keywords": [],
   "dependencies": {
     "@emotion/react": "^11.11.4",
     "@emotion/styled": "^11.11.0",
+    "@mui/icons-material": "^5.17.1",
     "@mui/material": "^5.15.14",
     "@tauri-apps/api": "^1.5.3",
     "file-saver": "^2.0.5",

@@ -1,10 +1,49 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import styles from '@/styles/ImageCropper.module.css';
-import { Slider, Box, Typography, LinearProgress, FormControlLabel, Switch } from '@mui/material';
+import { 
+  Slider, 
+  Box, 
+  Typography, 
+  LinearProgress, 
+  FormControlLabel, 
+  Switch,
+  Grid,
+  Paper,
+  Divider,
+  Button,
+  Alert,
+  Snackbar,
+  Tooltip,
+  IconButton,
+  Card,
+  CardContent,
+  CardActions,
+  Fade,
+  Zoom,
+  Chip,
+  Stack
+} from '@mui/material';
+import {
+  CloudUpload as UploadIcon,
+  Download as DownloadIcon,
+  Settings as SettingsIcon,
+  Refresh as RefreshIcon,
+  ZoomIn as ZoomInIcon,
+  ZoomOut as ZoomOutIcon,
+  Crop as CropIcon,
+  AutoFixHigh as MagicIcon,
+  Save as SaveIcon,
+  Palette as PaletteIcon,
+  Speed as SpeedIcon,
+  Timeline as TimelineIcon,
+  PhotoCamera as PhotoIcon
+} from '@mui/icons-material';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { WorkerManager } from '@/utils/workerManager';
 import type { ImageData, CropArea } from '@/utils/workerManager';
+import { ImageProcessingPanel } from './ImageProcessingPanel';
+import { ProcessingOptions, ImageStats, ImageProcessor } from '@/utils/imageProcessing';
 
 const ImageCropper = () => {
   // States
@@ -23,11 +62,35 @@ const ImageCropper = () => {
   const [useRandomAspectRatio, setUseRandomAspectRatio] = useState(false);
   const [aspectRatioRange, setAspectRatioRange] = useState([0.5, 2]);
   const [allowOutOfBounds, setAllowOutOfBounds] = useState(true);
+  
+  // 新增：图像处理相关状态
+  const [currentImageData, setCurrentImageData] = useState<ImageData | null>(null);
+  const [processedImageData, setProcessedImageData] = useState<ImageData | null>(null);
+  const [currentProcessingOptions, setCurrentProcessingOptions] = useState<ProcessingOptions>({});
+  const [imageStats, setImageStats] = useState<ImageStats | null>(null);
+  const [showProcessingPanel, setShowProcessingPanel] = useState(false);
+
+  // 新增：交互优化状态
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error' | 'info'>('info');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [canvasScale, setCanvasScale] = useState(1);
 
   // Refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const workerManagerRef = useRef<WorkerManager | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 显示消息提示
+  const showMessage = useCallback((message: string, severity: 'success' | 'error' | 'info' = 'info') => {
+    setSnackbarMessage(message);
+    setSnackbarSeverity(severity);
+    setSnackbarOpen(true);
+  }, []);
 
   // Initialize worker manager
   useEffect(() => {
@@ -37,26 +100,110 @@ const ImageCropper = () => {
     };
   }, []);
 
+  // 处理拖拽上传
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    
+    const files = e.dataTransfer.files;
+    if (files && files[0]) {
+      handleFileUpload(files[0]);
+    }
+  }, []);
+
+  // 统一的文件处理函数
+  const handleFileUpload = useCallback((file: File) => {
+    if (!file.type.startsWith('image/')) {
+      showMessage('请选择有效的图片文件', 'error');
+      return;
+    }
+
+    if (file.size > 10 * 1024 * 1024) { // 10MB限制
+      showMessage('图片文件过大，请选择小于10MB的图片', 'error');
+      return;
+    }
+
+    setIsProcessing(true);
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      if (event.target && typeof event.target.result === 'string') {
+        const img = new Image();
+        img.onload = () => {
+          setImage(img);
+          setCrop(null);
+          setIsDragging(false);
+          setCroppedImages([]);
+          setError(null);
+          setCanvasScale(1);
+          
+          // 获取原始图像数据
+          updateImageData(img);
+          showMessage('图片上传成功！', 'success');
+          setIsProcessing(false);
+        };
+        img.onerror = () => {
+          showMessage('图片加载失败，请尝试其他图片', 'error');
+          setIsProcessing(false);
+        };
+        img.src = event.target.result;
+        setImageSrc(event.target.result);
+      }
+    };
+    reader.onerror = () => {
+      showMessage('文件读取失败', 'error');
+      setIsProcessing(false);
+    };
+    reader.readAsDataURL(file);
+  }, [showMessage]);
+
   // Handle image upload
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target && typeof event.target.result === 'string') {
-          const img = new Image();
-          img.onload = () => {
-            setImage(img);
-            setCrop(null);
-            setIsDragging(false);
-            setCroppedImages([]);
-            setError(null);
-          };
-          img.src = event.target.result;
-          setImageSrc(event.target.result);
-        }
-      };
-      reader.readAsDataURL(e.target.files[0]);
+      handleFileUpload(e.target.files[0]);
     }
+  };
+
+  // 更新图像数据
+  const updateImageData = (img: HTMLImageElement) => {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d')!;
+    canvas.width = img.width;
+    canvas.height = img.height;
+    ctx.drawImage(img, 0, 0);
+    
+    const imageData = ctx.getImageData(0, 0, img.width, img.height);
+    setCurrentImageData(imageData);
+    setProcessedImageData(null);
+  };
+
+  // 处理图像处理结果
+  const handleProcessedImage = (processedData: ImageData, options: ProcessingOptions) => {
+    setProcessedImageData(processedData);
+    setCurrentProcessingOptions(options);
+    
+    // 更新预览画布
+    updatePreviewCanvas(processedData);
+  };
+
+  // 更新预览画布
+  const updatePreviewCanvas = (imageData: ImageData) => {
+    const canvas = previewCanvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext('2d')!;
+    canvas.width = imageData.width;
+    canvas.height = imageData.height;
+    ctx.putImageData(imageData, 0, 0);
   };
 
   // Draw image and crop area on canvas
@@ -151,7 +298,7 @@ const ImageCropper = () => {
   // Generate cropped images with random expansion values
   const generateImages = async () => {
     if (!image || !crop || crop.width === 0 || crop.height === 0) {
-      setError('请先选择裁切区域');
+      showMessage('请先选择裁切区域', 'error');
       return;
     }
 
@@ -162,20 +309,30 @@ const ImageCropper = () => {
     const results: Array<{ url: string; aspectRatio: string }> = [];
 
     try {
-      // Get image data from canvas
-      const canvas = canvasRef.current;
-      if (!canvas) throw new Error('Canvas not found');
+      showMessage('开始生成裁切结果...', 'info');
       
-      const ctx = canvas.getContext('2d');
-      if (!ctx) throw new Error('Canvas context not found');
+      // Get image data - use processed data if available, otherwise use original
+      let imageData: ImageData;
+      
+      if (processedImageData) {
+        // 使用处理后的图像数据
+        imageData = processedImageData;
+      } else {
+        // 使用原始图像数据
+        const canvas = canvasRef.current;
+        if (!canvas) throw new Error('Canvas not found');
+        
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas context not found');
 
-      // 清除画布上的框选效果
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      // 重新绘制原始图片
-      ctx.drawImage(image, 0, 0);
+        // 清除画布上的框选效果
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // 重新绘制原始图片
+        ctx.drawImage(image, 0, 0);
 
-      // 获取图像数据
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height) as unknown as ImageData;
+        // 获取图像数据
+        imageData = ctx.getImageData(0, 0, canvas.width, canvas.height) as unknown as ImageData;
+      }
 
       // Process each image
       for (let i = 0; i < batchCount; i++) {
@@ -270,24 +427,34 @@ const ImageCropper = () => {
         results.push({ url: dataURL, aspectRatio: aspectRatioText });
 
         // Update progress
-        setProgress((i + 1) / batchCount * 100);
+        const progressPercent = (i + 1) / batchCount * 100;
+        setProgress(progressPercent);
       }
 
       setCroppedImages(results);
+      showMessage(`成功生成${results.length}张裁切结果！`, 'success');
 
-      // 重新绘制框选效果
-      ctx.drawImage(image, 0, 0);
-      if (crop) {
-        ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
+      // 重新绘制框选效果（只有在使用原始图像数据时才需要）
+      if (!processedImageData) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const ctx = canvas.getContext('2d');
+          if (ctx && crop) {
+            ctx.drawImage(image, 0, 0);
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(crop.x, crop.y, crop.width, crop.height);
 
-        // Semi-transparent overlay for better visibility
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.fillRect(crop.x, crop.y, crop.width, crop.height);
+            // Semi-transparent overlay for better visibility
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            ctx.fillRect(crop.x, crop.y, crop.width, crop.height);
+          }
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : '处理图片时发生错误');
+      const errorMessage = err instanceof Error ? err.message : '处理图片时发生错误';
+      setError(errorMessage);
+      showMessage(errorMessage, 'error');
     } finally {
       setIsGenerating(false);
       setProgress(0);
@@ -297,196 +464,621 @@ const ImageCropper = () => {
   // Download all generated images as a zip file
   const downloadImages = () => {
     if (croppedImages.length === 0) {
-      setError('请先生成裁切结果');
+      showMessage('请先生成裁切结果', 'error');
       return;
     }
 
-    const zip = new JSZip();
-    const imgFolder = zip.folder("cropped_images");
+    try {
+      const zip = new JSZip();
+      const imgFolder = zip.folder("cropped_images");
 
-    croppedImages.forEach((result, index) => {
-      // Convert data URL to blob
-      const byteString = atob(result.url.split(',')[1]);
-      const mimeString = result.url.split(',')[0].split(':')[1].split(';')[0];
-      const ab = new ArrayBuffer(byteString.length);
-      const ia = new Uint8Array(ab);
-      
-      for (let i = 0; i < byteString.length; i++) {
-        ia[i] = byteString.charCodeAt(i);
-      }
-      
-      const blob = new Blob([ab], { type: mimeString });
-      imgFolder?.file(`cropped_${index + 1}.png`, blob);
-    });
+      croppedImages.forEach((result, index) => {
+        // Convert data URL to blob
+        const byteString = atob(result.url.split(',')[1]);
+        const mimeString = result.url.split(',')[0].split(':')[1].split(';')[0];
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        
+        const blob = new Blob([ab], { type: mimeString });
+        imgFolder?.file(`cropped_${index + 1}.png`, blob);
+      });
 
-    zip.generateAsync({ type: "blob" }).then((content) => {
-      saveAs(content, "cropped_images.zip");
-    });
+      zip.generateAsync({ type: "blob" }).then((content) => {
+        saveAs(content, "cropped_images.zip");
+        showMessage('下载开始！', 'success');
+      }).catch(() => {
+        showMessage('下载失败，请重试', 'error');
+      });
+    } catch (err) {
+      showMessage('准备下载时出错', 'error');
+    }
   };
 
   return (
-    <div className={styles.container} ref={containerRef}>
-      <div className={styles.uploadSection}>
-        <input
-          type="file"
-          accept="image/*"
-          onChange={handleImageUpload}
-          className={styles.fileInput}
-          id="image-upload"
-        />
-        <label htmlFor="image-upload" className={styles.uploadButton}>
-          上传图片
-        </label>
-      </div>
-      
-      {image && (
-        <>
-          <div className={styles.canvasContainer}>
-            <canvas
-              ref={canvasRef}
-              className={styles.canvas}
-              onMouseDown={handleMouseDown}
-              onMouseMove={handleMouseMove}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
+    <Box sx={{ maxWidth: 1600, mx: 'auto', p: 3, backgroundColor: '#f8fafc' }}>
+      {/* 主横幅 */}
+      <Paper 
+        elevation={4} 
+        sx={{ 
+          p: 4, 
+          mb: 4, 
+          background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+          color: 'white',
+          borderRadius: 3
+        }}
+      >
+        <Box sx={{ textAlign: 'center', position: 'relative' }}>
+          <Zoom in timeout={1000}>
+            <PhotoIcon sx={{ fontSize: 60, mb: 2, opacity: 0.9 }} />
+          </Zoom>
+          <Fade in timeout={1500}>
+            <Typography variant="h3" gutterBottom fontWeight="bold">
+              AI 图像锚定裁切工具
+            </Typography>
+          </Fade>
+          <Fade in timeout={2000}>
+            <Typography variant="h6" sx={{ opacity: 0.9, maxWidth: 600, mx: 'auto' }}>
+              智能图像处理 · 数据增强 · 批量裁切 · 机器学习数据集生成
+            </Typography>
+          </Fade>
+          
+          {/* 功能特色标签 */}
+          <Box sx={{ mt: 3, display: 'flex', gap: 1, justifyContent: 'center', flexWrap: 'wrap' }}>
+            <Chip 
+              icon={<MagicIcon />} 
+              label="智能处理" 
+              variant="outlined" 
+              sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }} 
             />
-            <div className={styles.instructions}>
-              {!crop ? '点击并拖动鼠标选择锚点区域' : '锚点区域已选择'}
-            </div>
-          </div>
+            <Chip 
+              icon={<SpeedIcon />} 
+              label="批量生成" 
+              variant="outlined" 
+              sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }} 
+            />
+            <Chip 
+              icon={<PaletteIcon />} 
+              label="多种滤镜" 
+              variant="outlined" 
+              sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }} 
+            />
+            <Chip 
+              icon={<TimelineIcon />} 
+              label="数据增强" 
+              variant="outlined" 
+              sx={{ color: 'white', borderColor: 'rgba(255,255,255,0.5)' }} 
+            />
+          </Box>
+        </Box>
+      </Paper>
 
-          <div className={styles.controls}>
-            <div className={styles.sliderContainer}>
-              <Typography variant="subtitle1" gutterBottom>
-                扩展比例范围：{minExpansion}% - {maxExpansion}%
-              </Typography>
-              <Box sx={{ width: '100%', padding: '0 10px' }}>
-                <Slider
-                  value={[minExpansion, maxExpansion]}
-                  onChange={(_, newValue) => {
-                    if (Array.isArray(newValue)) {
-                      setMinExpansion(newValue[0]);
-                      setMaxExpansion(newValue[1]);
-                    }
-                  }}
-                  min={-99}
-                  max={200}
-                  valueLabelDisplay="auto"
-                  disableSwap
-                />
-              </Box>
-            </div>
-
-            <div className={styles.aspectRatioControl}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={useRandomAspectRatio}
-                    onChange={(e) => setUseRandomAspectRatio(e.target.checked)}
-                    color="primary"
-                  />
+      {/* 文件上传区域 */}
+      <Card 
+        elevation={2}
+        sx={{ 
+          mb: 4, 
+          borderRadius: 3,
+          border: isDragOver ? '2px dashed #667eea' : '2px dashed transparent',
+          transition: 'all 0.3s ease',
+          backgroundColor: isDragOver ? 'rgba(102, 126, 234, 0.05)' : 'white'
+        }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <CardContent sx={{ p: 4, textAlign: 'center' }}>
+          <UploadIcon 
+            sx={{ 
+              fontSize: 80, 
+              color: isDragOver ? '#667eea' : '#ccc', 
+              mb: 2,
+              transition: 'color 0.3s ease'
+            }} 
+          />
+          <Typography variant="h5" gutterBottom color={isDragOver ? 'primary' : 'text.secondary'}>
+            {isDragOver ? '释放鼠标上传图片' : '拖拽图片到此处或点击上传'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            支持 JPG、PNG、WebP 格式，文件大小不超过 10MB
+          </Typography>
+          
+          <input
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            style={{ display: 'none' }}
+            id="image-upload"
+            ref={fileInputRef}
+          />
+          <label htmlFor="image-upload">
+            <Button 
+              variant="contained" 
+              component="span" 
+              size="large"
+              startIcon={<UploadIcon />}
+              sx={{ 
+                px: 4, 
+                py: 1.5,
+                borderRadius: 2,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%)',
                 }
-                label="启用随机高宽比"
-              />
-              {useRandomAspectRatio && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="subtitle1" gutterBottom>
-                    高宽比范围：{aspectRatioRange[0].toFixed(1)} - {aspectRatioRange[1].toFixed(1)}
-                  </Typography>
-                  <Box sx={{ width: '100%', padding: '0 10px' }}>
-                    <Slider
-                      value={aspectRatioRange}
-                      onChange={(_, newValue) => {
-                        if (Array.isArray(newValue)) {
-                          setAspectRatioRange(newValue);
-                        }
-                      }}
-                      min={0.1}
-                      max={5}
-                      step={0.1}
-                      valueLabelDisplay="auto"
-                      disableSwap
-                    />
-                  </Box>
-                  <Typography variant="body2" color="text.secondary" align="center">
-                    提示：1.0 表示正方形，小于 1 表示更宽，大于 1 表示更高
-                  </Typography>
-                </Box>
-              )}
-            </div>
-
-            <div className={styles.boundaryControl}>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={allowOutOfBounds}
-                    onChange={(e) => setAllowOutOfBounds(e.target.checked)}
-                    color="primary"
-                  />
-                }
-                label="允许超出原图边界"
-              />
-              <Typography variant="body2" color="text.secondary" align="center" sx={{ mt: 1 }}>
-                {allowOutOfBounds ? '超出部分将填充黑色' : '裁剪区域将自动调整以保持在原图范围内'}
-              </Typography>
-            </div>
-
-            <div className={styles.batchControl}>
-              <Typography variant="subtitle1" gutterBottom>
-                批量生成数量：{batchCount}张
-              </Typography>
-              <input
-                type="range"
-                min="1"
-                max="50"
-                value={batchCount}
-                onChange={(e) => setBatchCount(parseInt(e.target.value))}
-                className={styles.batchSlider}
-              />
-            </div>
-
-            {error && (
-              <Typography color="error" sx={{ mt: 1 }}>
-                {error}
-              </Typography>
-            )}
-
-            {isGenerating && (
-              <Box sx={{ width: '100%', mt: 2 }}>
-                <LinearProgress variant="determinate" value={progress} />
-                <Typography variant="body2" color="text.secondary" align="center" sx={{ mt: 1 }}>
-                  {Math.round(progress)}%
-                </Typography>
-              </Box>
-            )}
-
-            <button 
-              className={styles.generateButton}
-              onClick={generateImages}
-              disabled={!crop || isGenerating}
+              }}
+              disabled={isProcessing}
             >
-              {isGenerating ? '生成中...' : '生成裁切结果'}
-            </button>
-          </div>
+              {isProcessing ? '处理中...' : '选择图片'}
+            </Button>
+          </label>
+        </CardContent>
+      </Card>
 
-          {croppedImages.length > 0 && (
-            <div className={styles.resultsContainer}>
-              <h3>生成结果预览</h3>
-              <div className={styles.imageGrid}>
-                {croppedImages.map((result, index) => (
-                  <div key={index} className={styles.resultItem} data-aspect-ratio={result.aspectRatio}>
-                    <img src={result.url} alt={`Result ${index + 1}`} className={styles.resultImage} />
-                  </div>
-                ))}
-              </div>
-              <button className={styles.downloadButton} onClick={downloadImages}>
-                下载所有结果 (ZIP)
-              </button>
-            </div>
-          )}
-        </>
+      {image && (
+        <Fade in timeout={800}>
+          <Grid container spacing={4}>
+            {/* 左侧：图像预览和操作 */}
+            <Grid item xs={12} lg={showProcessingPanel ? 8 : 12}>
+              <Card elevation={3} sx={{ borderRadius: 3, overflow: 'hidden' }}>
+                <Box sx={{ 
+                  background: 'linear-gradient(90deg, #f8fafc 0%, #e2e8f0 100%)',
+                  p: 2,
+                  borderBottom: '1px solid #e2e8f0'
+                }}>
+                  <Stack direction="row" alignItems="center" spacing={2}>
+                    <CropIcon color="primary" />
+                    <Typography variant="h6" fontWeight="600">
+                      图像预览与裁切区域选择
+                    </Typography>
+                    <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+                      <Tooltip title="缩小">
+                        <IconButton 
+                          size="small" 
+                          onClick={() => setCanvasScale(Math.max(0.1, canvasScale - 0.1))}
+                          disabled={canvasScale <= 0.1}
+                        >
+                          <ZoomOutIcon />
+                        </IconButton>
+                      </Tooltip>
+                      <Chip 
+                        label={`${(canvasScale * 100).toFixed(0)}%`} 
+                        size="small" 
+                        variant="outlined"
+                      />
+                      <Tooltip title="放大">
+                        <IconButton 
+                          size="small" 
+                          onClick={() => setCanvasScale(Math.min(3, canvasScale + 0.1))}
+                          disabled={canvasScale >= 3}
+                        >
+                          <ZoomInIcon />
+                        </IconButton>
+                      </Tooltip>
+                    </Box>
+                  </Stack>
+                </Box>
+
+                <CardContent sx={{ p: 3 }}>
+                  {/* 图像处理控制按钮 */}
+                  <Box sx={{ mb: 3, display: 'flex', gap: 2, flexWrap: 'wrap' }}>
+                    <Button
+                      variant={showProcessingPanel ? "contained" : "outlined"}
+                      startIcon={<SettingsIcon />}
+                      onClick={() => setShowProcessingPanel(!showProcessingPanel)}
+                      sx={{ borderRadius: 2 }}
+                    >
+                      {showProcessingPanel ? '隐藏' : '显示'}图像处理
+                    </Button>
+                    {processedImageData && (
+                      <Button
+                        variant="outlined"
+                        startIcon={<RefreshIcon />}
+                        onClick={() => {
+                          setProcessedImageData(null);
+                          setCurrentProcessingOptions({});
+                          showMessage('已重置图像处理效果', 'info');
+                        }}
+                        sx={{ borderRadius: 2 }}
+                      >
+                        重置效果
+                      </Button>
+                    )}
+                  </Box>
+
+                  {/* 画布容器 */}
+                  <Paper 
+                    elevation={1}
+                    sx={{ 
+                      p: 2,
+                      backgroundColor: '#f8fafc',
+                      border: '2px solid #e2e8f0',
+                      borderRadius: 2,
+                      mb: 3
+                    }}
+                  >
+                    <Grid container spacing={2}>
+                      {/* 原始图像画布 */}
+                      <Grid item xs={12} md={showProcessingPanel && processedImageData ? 6 : 12}>
+                        <Box sx={{ textAlign: 'center' }}>
+                          <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 500 }}>
+                            {crop ? '✅ 已选择锚点区域' : '📍 点击拖动选择锚点区域'}
+                          </Typography>
+                          <Box sx={{ 
+                            display: 'inline-block', 
+                            border: '3px solid #e2e8f0', 
+                            borderRadius: 2,
+                            background: 'white',
+                            p: 1
+                          }}>
+                            <canvas
+                              ref={canvasRef}
+                              style={{
+                                maxWidth: '100%',
+                                maxHeight: '500px',
+                                cursor: 'crosshair',
+                                transform: `scale(${canvasScale})`,
+                                transformOrigin: 'center',
+                                transition: 'transform 0.2s ease'
+                              }}
+                              onMouseDown={handleMouseDown}
+                              onMouseMove={handleMouseMove}
+                              onMouseUp={handleMouseUp}
+                              onMouseLeave={handleMouseUp}
+                            />
+                          </Box>
+                        </Box>
+                      </Grid>
+
+                      {/* 处理后的图像预览 */}
+                      {processedImageData && showProcessingPanel && (
+                        <Grid item xs={12} md={6}>
+                          <Box sx={{ textAlign: 'center' }}>
+                            <Typography variant="subtitle1" gutterBottom sx={{ fontWeight: 500 }}>
+                              ✨ 处理后效果预览
+                            </Typography>
+                            <Box sx={{ 
+                              display: 'inline-block', 
+                              border: '3px solid #667eea', 
+                              borderRadius: 2,
+                              background: 'white',
+                              p: 1
+                            }}>
+                              <canvas
+                                ref={previewCanvasRef}
+                                style={{
+                                  maxWidth: '100%',
+                                  maxHeight: '500px',
+                                  transform: `scale(${canvasScale})`,
+                                  transformOrigin: 'center',
+                                  transition: 'transform 0.2s ease'
+                                }}
+                              />
+                            </Box>
+                          </Box>
+                        </Grid>
+                      )}
+                    </Grid>
+                  </Paper>
+
+                  <Divider sx={{ my: 3 }} />
+
+                  {/* 裁切参数控制 */}
+                  <Box sx={{ mb: 3 }}>
+                    <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 3 }}>
+                      <SettingsIcon color="primary" />
+                      <Typography variant="h6" fontWeight="600">
+                        裁切参数设置
+                      </Typography>
+                    </Stack>
+                    
+                    <Grid container spacing={3}>
+                      <Grid item xs={12} md={6}>
+                        <Paper elevation={1} sx={{ p: 3, borderRadius: 2, backgroundColor: '#f8fafc' }}>
+                          <Typography variant="subtitle1" gutterBottom fontWeight="500">
+                            📏 扩展比例范围：{minExpansion}% - {maxExpansion}%
+                          </Typography>
+                          <Slider
+                            value={[minExpansion, maxExpansion]}
+                            onChange={(_, newValue) => {
+                              if (Array.isArray(newValue)) {
+                                setMinExpansion(newValue[0]);
+                                setMaxExpansion(newValue[1]);
+                              }
+                            }}
+                            min={-99}
+                            max={200}
+                            valueLabelDisplay="auto"
+                            disableSwap
+                            sx={{ mt: 2 }}
+                          />
+                        </Paper>
+                      </Grid>
+
+                      <Grid item xs={12} md={6}>
+                        <Paper elevation={1} sx={{ p: 3, borderRadius: 2, backgroundColor: '#f8fafc' }}>
+                          <Typography variant="subtitle1" gutterBottom fontWeight="500">
+                            🔢 批量生成数量：{batchCount}张
+                          </Typography>
+                          <Slider
+                            value={batchCount}
+                            onChange={(_, value) => setBatchCount(value as number)}
+                            min={1}
+                            max={50}
+                            valueLabelDisplay="auto"
+                            marks={[
+                              { value: 1, label: '1' },
+                              { value: 25, label: '25' },
+                              { value: 50, label: '50' },
+                            ]}
+                            sx={{ mt: 2 }}
+                          />
+                        </Paper>
+                      </Grid>
+
+                      <Grid item xs={12} md={6}>
+                        <Paper elevation={1} sx={{ p: 3, borderRadius: 2, backgroundColor: '#f8fafc' }}>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                checked={useRandomAspectRatio}
+                                onChange={(e) => setUseRandomAspectRatio(e.target.checked)}
+                                color="primary"
+                              />
+                            }
+                            label={
+                              <Typography fontWeight="500">
+                                📐 启用随机高宽比
+                              </Typography>
+                            }
+                          />
+                          {useRandomAspectRatio && (
+                            <Box sx={{ mt: 2 }}>
+                              <Typography variant="body2" gutterBottom>
+                                高宽比范围：{aspectRatioRange[0].toFixed(1)} - {aspectRatioRange[1].toFixed(1)}
+                              </Typography>
+                              <Slider
+                                value={aspectRatioRange}
+                                onChange={(_, newValue) => {
+                                  if (Array.isArray(newValue)) {
+                                    setAspectRatioRange(newValue);
+                                  }
+                                }}
+                                min={0.1}
+                                max={5}
+                                step={0.1}
+                                valueLabelDisplay="auto"
+                                disableSwap
+                              />
+                            </Box>
+                          )}
+                        </Paper>
+                      </Grid>
+
+                      <Grid item xs={12} md={6}>
+                        <Paper elevation={1} sx={{ p: 3, borderRadius: 2, backgroundColor: '#f8fafc' }}>
+                          <FormControlLabel
+                            control={
+                              <Switch
+                                checked={allowOutOfBounds}
+                                onChange={(e) => setAllowOutOfBounds(e.target.checked)}
+                                color="primary"
+                              />
+                            }
+                            label={
+                              <Typography fontWeight="500">
+                                🔒 允许超出原图边界
+                              </Typography>
+                            }
+                          />
+                          <Typography variant="caption" display="block" color="text.secondary" sx={{ mt: 1 }}>
+                            {allowOutOfBounds ? '超出部分将填充黑色' : '裁剪区域将自动调整'}
+                          </Typography>
+                        </Paper>
+                      </Grid>
+                    </Grid>
+                  </Box>
+
+                  {/* 错误提示 */}
+                  {error && (
+                    <Alert severity="error" sx={{ mt: 2, borderRadius: 2 }}>
+                      {error}
+                    </Alert>
+                  )}
+
+                  {/* 生成进度 */}
+                  {isGenerating && (
+                    <Box sx={{ mt: 3 }}>
+                      <Paper elevation={1} sx={{ p: 3, borderRadius: 2, backgroundColor: '#f0f9ff' }}>
+                        <LinearProgress 
+                          variant="determinate" 
+                          value={progress} 
+                          sx={{ 
+                            height: 8, 
+                            borderRadius: 4,
+                            backgroundColor: '#e0f2fe',
+                            '& .MuiLinearProgress-bar': {
+                              backgroundColor: '#0284c7'
+                            }
+                          }} 
+                        />
+                        <Typography variant="body2" color="text.secondary" align="center" sx={{ mt: 2 }}>
+                          🚀 生成进度: {Math.round(progress)}%
+                        </Typography>
+                      </Paper>
+                    </Box>
+                  )}
+
+                  {/* 当前状态提示 */}
+                  {processedImageData && (
+                    <Alert 
+                      severity="info" 
+                      icon={<MagicIcon />}
+                      sx={{ 
+                        mt: 3,
+                        borderRadius: 2,
+                        background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%)',
+                        border: '1px solid rgba(102, 126, 234, 0.3)'
+                      }}
+                    >
+                      ✨ 当前将使用图像处理效果进行裁切
+                    </Alert>
+                  )}
+
+                  {/* 生成按钮 */}
+                  <Button
+                    variant="contained"
+                    size="large"
+                    onClick={generateImages}
+                    disabled={!crop || isGenerating}
+                    startIcon={isGenerating ? <TimelineIcon /> : <MagicIcon />}
+                    sx={{ 
+                      mt: 3, 
+                      width: '100%',
+                      py: 2,
+                      borderRadius: 3,
+                      fontSize: '1.1rem',
+                      fontWeight: 600,
+                      background: isGenerating 
+                        ? 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)'
+                        : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      '&:hover': {
+                        background: isGenerating 
+                          ? 'linear-gradient(135deg, #94a3b8 0%, #64748b 100%)'
+                          : 'linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%)',
+                      }
+                    }}
+                  >
+                    {isGenerating ? '生成中...' : '🎯 开始生成裁切结果'}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* 生成结果预览 */}
+              {croppedImages.length > 0 && (
+                <Fade in timeout={1000}>
+                  <Card elevation={3} sx={{ mt: 4, borderRadius: 3 }}>
+                    <Box sx={{ 
+                      background: 'linear-gradient(90deg, #f0fdf4 0%, #dcfce7 100%)',
+                      p: 2,
+                      borderBottom: '1px solid #e2e8f0'
+                    }}>
+                      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <Stack direction="row" alignItems="center" spacing={2}>
+                          <SaveIcon color="success" />
+                          <Typography variant="h6" fontWeight="600">
+                            生成结果预览 ({croppedImages.length}张)
+                          </Typography>
+                        </Stack>
+                        <Button 
+                          variant="contained"
+                          startIcon={<DownloadIcon />}
+                          onClick={downloadImages}
+                          sx={{ 
+                            borderRadius: 2,
+                            background: 'linear-gradient(135deg, #059669 0%, #047857 100%)',
+                            '&:hover': {
+                              background: 'linear-gradient(135deg, #047857 0%, #065f46 100%)',
+                            }
+                          }}
+                        >
+                          下载所有结果 (ZIP)
+                        </Button>
+                      </Box>
+                    </Box>
+                    <CardContent sx={{ p: 3 }}>
+                      <Grid container spacing={2}>
+                        {croppedImages.map((result, index) => (
+                          <Grid item xs={6} sm={4} md={3} lg={2} key={index}>
+                            <Card 
+                              elevation={2} 
+                              sx={{ 
+                                borderRadius: 2,
+                                transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                                '&:hover': {
+                                  transform: 'translateY(-4px)',
+                                  boxShadow: '0 8px 25px rgba(0,0,0,0.15)'
+                                }
+                              }}
+                            >
+                              <Box sx={{ p: 1 }}>
+                                <img 
+                                  src={result.url} 
+                                  alt={`Result ${index + 1}`}
+                                  style={{ 
+                                    width: '100%', 
+                                    height: 'auto',
+                                    maxHeight: '120px',
+                                    objectFit: 'contain',
+                                    borderRadius: '4px'
+                                  }}
+                                />
+                              </Box>
+                              <Box sx={{ p: 1, pt: 0 }}>
+                                <Typography variant="caption" display="block" align="center" color="text.secondary">
+                                  #{index + 1} · {result.aspectRatio}
+                                </Typography>
+                              </Box>
+                            </Card>
+                          </Grid>
+                        ))}
+                      </Grid>
+                    </CardContent>
+                  </Card>
+                </Fade>
+              )}
+            </Grid>
+
+            {/* 右侧：图像处理面板 */}
+            {showProcessingPanel && (
+              <Grid item xs={12} lg={4}>
+                <Fade in timeout={600}>
+                  <Card elevation={3} sx={{ borderRadius: 3, maxHeight: 900, overflow: 'auto' }}>
+                    <Box sx={{ 
+                      background: 'linear-gradient(90deg, #fef3c7 0%, #fde68a 100%)',
+                      p: 2,
+                      borderBottom: '1px solid #e2e8f0'
+                    }}>
+                      <Stack direction="row" alignItems="center" spacing={2}>
+                        <PaletteIcon color="warning" />
+                        <Typography variant="h6" fontWeight="600">
+                          图像处理面板
+                        </Typography>
+                      </Stack>
+                    </Box>
+                    <CardContent sx={{ p: 2 }}>
+                      <ImageProcessingPanel
+                        imageData={currentImageData}
+                        onProcessedImage={handleProcessedImage}
+                        onStatsUpdate={setImageStats}
+                      />
+                    </CardContent>
+                  </Card>
+                </Fade>
+              </Grid>
+            )}
+          </Grid>
+        </Fade>
       )}
-    </div>
+
+      {/* 消息提示 */}
+      <Snackbar 
+        open={snackbarOpen} 
+        autoHideDuration={4000} 
+        onClose={() => setSnackbarOpen(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert 
+          onClose={() => setSnackbarOpen(false)} 
+          severity={snackbarSeverity}
+          sx={{ borderRadius: 2 }}
+        >
+          {snackbarMessage}
+        </Alert>
+      </Snackbar>
+    </Box>
   );
 };
 

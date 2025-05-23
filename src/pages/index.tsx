@@ -9,16 +9,12 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>动态区域锚定裁切工具</title>
-        <meta name="description" content="图片动态区域锚定裁切工具" />
+        <title>AI 图像锚定裁切工具</title>
+        <meta name="description" content="智能图像处理、数据增强、批量裁切、机器学习数据集生成工具" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <main className={`${styles.main} ${inter.className}`}>
-        <h1 className={styles.title}>动态区域锚定裁切工具</h1>
-        <p className={styles.description}>
-          上传图片，框选锚点区域，设置扩展参数，批量生成裁切结果
-        </p>
         <ImageCropper />
       </main>
     </>
